@@ -12,13 +12,12 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from aiohttp import web
 import gspread
 from google.oauth2.service_account import Credentials
-# Добавляем планировщик
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
 
 logging.basicConfig(level=logging.INFO)
 
-# --- ПЕРЕМЕННЫЕ ---
+# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("BOT_TOKEN")
 SHEET_NAME = os.getenv("SHEET_NAME")
 GOOGLE_CAL = os.getenv("GOOGLE_CAL_URL")
@@ -35,9 +34,10 @@ def get_gspread_client():
         )
         return gspread.authorize(creds)
     except Exception as e:
-        logging.error(f"Gspread error: {e}")
+        logging.error(f"Gspread Auth Error: {e}")
         return None
 
+# Состояния регистрации
 class Registration(StatesGroup):
     full_name = State()
     email = State()
@@ -52,9 +52,11 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler(timezone=BELGRADE_TZ)
 
-# --- РЕГИСТРАЦИЯ (те же 7 шагов) ---
+# --- ДИАЛОГ РЕГИСТРАЦИИ ---
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()  # Сбрасываем старые состояния, если они были
     await message.answer(
         "Здравствуйте! 👋\nВы регистрируетесь на митап от G5 Games:\n"
         "«Продукт и маркетинг в геймдеве».\n\n"
@@ -62,25 +64,88 @@ async def cmd_start(message: types.Message, state: FSMContext):
     )
     await state.set_state(Registration.full_name)
 
-# ... (все промежуточные шаги из предыдущего кода остаются такими же) ...
+@dp.message(Registration.full_name)
+async def process_name(message: types.Message, state: FSMContext):
+    await state.update_data(full_name=message.text)
+    await message.answer("(2/7) Введите ваш e-mail:")
+    await state.set_state(Registration.email)
+
+@dp.message(Registration.email)
+async def process_email(message: types.Message, state: FSMContext):
+    if "@" not in message.text:
+        await message.answer("Пожалуйста, введите корректный e-mail (с символом @):")
+        return
+    await state.update_data(email=message.text)
+    
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🎮 Game Design"), KeyboardButton(text="📊 Product / Analytics")],
+        [KeyboardButton(text="🎨 Art / Design"), KeyboardButton(text="💻 Development")],
+        [KeyboardButton(text="📢 Marketing"), KeyboardButton(text="🧪 QA")],
+        [KeyboardButton(text="🧠 Management / Lead"), KeyboardButton(text="📚 HR / Recruitment")],
+        [KeyboardButton(text="✏️ Другое")]
+    ], resize_keyboard=True)
+    await message.answer("(3/7) В каком направлении вы сейчас работаете?", reply_markup=kb)
+    await state.set_state(Registration.direction)
+
+@dp.message(Registration.direction)
+async def process_direction(message: types.Message, state: FSMContext):
+    if message.text == "✏️ Другое":
+        await message.answer("Пожалуйста, укажите ваше направление вручную:")
+        await state.set_state(Registration.custom_direction)
+    else:
+        await state.update_data(direction=message.text)
+        await ask_company(message, state)
+
+@dp.message(Registration.custom_direction)
+async def process_custom_direction(message: types.Message, state: FSMContext):
+    await state.update_data(direction=message.text)
+    await ask_company(message, state)
+
+async def ask_company(message: types.Message, state: FSMContext):
+    await message.answer("(4/7) В какой компании вы работаете?", reply_markup=types.ReplyKeyboardRemove())
+    await state.set_state(Registration.company)
+
+@dp.message(Registration.company)
+async def process_company(message: types.Message, state: FSMContext):
+    await state.update_data(company=message.text)
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="нет опыта"), KeyboardButton(text="менее 1 года")],
+        [KeyboardButton(text="1-3 года"), KeyboardButton(text="3-6 лет")],
+        [KeyboardButton(text="более 6 лет")]
+    ], resize_keyboard=True)
+    await message.answer("(5/7) Ваш опыт работы в геймдеве:", reply_markup=kb)
+    await state.set_state(Registration.experience)
+
+@dp.message(Registration.experience)
+async def process_exp(message: types.Message, state: FSMContext):
+    await state.update_data(experience=message.text)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]], resize_keyboard=True)
+    await message.answer("(6/7) Вы рассматриваете новые рабочие предложения?", reply_markup=kb)
+    await state.set_state(Registration.job_offers)
+
+@dp.message(Registration.job_offers)
+async def process_offers(message: types.Message, state: FSMContext):
+    await state.update_data(job_offers=message.text)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]], resize_keyboard=True)
+    await message.answer("(7/7) Знали ли вы про компанию G5 Games ранее?", reply_markup=kb)
+    await state.set_state(Registration.known_g5)
 
 @dp.message(Registration.known_g5)
 async def finish_reg(message: types.Message, state: FSMContext):
-    user_data = await state.get_data()
-    full_name = user_data.get('full_name')
+    data = await state.get_data()
+    full_name = data.get('full_name')
     
     try:
         client = get_gspread_client()
         if client:
             sheet = client.open(SHEET_NAME).get_worksheet(0)
-            # Добавляем ID пользователя в 8-й столбец для рассылки
             sheet.append_row([
-                full_name, user_data.get('email'), user_data.get('direction'), 
-                user_data.get('company'), user_data.get('experience'), 
-                user_data.get('job_offers'), message.text, message.from_user.id
+                full_name, data.get('email'), data.get('direction'), 
+                data.get('company'), data.get('experience'), 
+                data.get('job_offers'), message.text, message.from_user.id, "Wait"
             ])
     except Exception as e:
-        logging.error(f"Table write error: {e}")
+        logging.error(f"Sheet write error: {e}")
 
     cal_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗓 Google Календарь", url=GOOGLE_CAL)],
@@ -99,19 +164,19 @@ async def finish_reg(message: types.Message, state: FSMContext):
 
 # --- ЛОГИКА УВЕДОМЛЕНИЙ ---
 
-# 1. Рассылка за сутки (25 февраля в 15:00)
+# 25 февраля, 15:00 (за сутки)
 async def send_24h_reminder():
     client = get_gspread_client()
     sheet = client.open(SHEET_NAME).get_worksheet(0)
-    users = sheet.get_all_values()[1:] # Пропускаем заголовок
+    records = sheet.get_all_values()[1:]
     
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="✅ Я буду!"), KeyboardButton(text="❌ Изменились планы")]
-    ], resize_keyboard=True, one_time_keyboard=True)
+    ], resize_keyboard=True)
 
-    for row in users:
+    for row in records:
         try:
-            user_id = row[7] # ID в 8-й колонке
+            user_id = row[7]
             await bot.send_message(
                 user_id, 
                 "🔔 Уже завтра митап от G5 Games: «Продукт и маркетинг в геймдеве»\n"
@@ -121,41 +186,46 @@ async def send_24h_reminder():
             )
         except: continue
 
-# Обработка ответов на уведомление
 @dp.message(F.text == "✅ Я буду!")
 async def confirm_yes(message: types.Message):
-    # Тут можно добавить логику отметки в таблице (например, в 9-ю колонку ставить "Да")
+    await update_status(message.from_user.id, "Coming")
     await message.answer("Отлично! Мы отметили, что вы придете.\nДо встречи на митапе 👋", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.message(F.text == "❌ Изменились планы")
 async def confirm_no(message: types.Message):
-    # Тут ставим пометку "Нет" в таблицу
-    await message.answer(
-        "Понимаем, планы меняются 🙂\nСпасибо, что предупредили!\n"
-        "Следите за анонсами будущих митапов в @g5careers.",
-        reply_markup=types.ReplyKeyboardRemove()
-    )
+    await update_status(message.from_user.id, "Declined")
+    await message.answer("Понимаем, планы меняются 🙂\nСпасибо, что предупредили!\nСледите за анонсами в @g5careers.", reply_markup=types.ReplyKeyboardRemove())
 
-# 2. Рассылка за 3 часа (26 февраля в 15:00)
+async def update_status(user_id, status):
+    try:
+        client = get_gspread_client()
+        sheet = client.open(SHEET_NAME).get_worksheet(0)
+        cell = sheet.find(str(user_id))
+        sheet.update_cell(cell.row, 9, status) # Столбец I
+    except: pass
+
+# 26 февраля, 15:00 (за 3 часа)
 async def send_3h_reminder():
-    # Логика: берем только тех, кто ответил "Я буду!" или всех (как решите)
     client = get_gspread_client()
     sheet = client.open(SHEET_NAME).get_worksheet(0)
-    users = sheet.get_all_values()[1:]
+    records = sheet.get_all_values()[1:]
     
-    for row in users:
-        try:
-            user_id = row[7]
-            await bot.send_message(user_id, "🚀 Мы начинаем сегодня в 18:00 — продуктовый митап от G5 Games\nДо скорой встречи в CDT Hub!")
-        except: continue
+    for row in records:
+        if row[8] == "Coming": # Пишем только тем, кто подтвердил
+            try:
+                await bot.send_message(row[7], "🚀 Мы начинаем сегодня в 18:00 — продуктовый митап от G5 Games\nДо скорой встречи в CDT Hub!")
+            except: continue
 
-# Настройка расписания
+# Планировщик
 scheduler.add_job(send_24h_reminder, 'cron', month=2, day=25, hour=15, minute=0)
 scheduler.add_job(send_3h_reminder, 'cron', month=2, day=26, hour=15, minute=0)
 
+# --- ЗАПУСК ---
 async def handle_hc(request): return web.Response(text="OK")
+
 async def main():
-    app = web.Application(); app.router.add_get("/", handle_hc)
+    app = web.Application()
+    app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     asyncio.create_task(site.start())
