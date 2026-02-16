@@ -1,233 +1,168 @@
 import os
-import json
 import base64
+import json
 import asyncio
-from datetime import datetime
-
-import pytz
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from aiohttp import web
-
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardRemove
-from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-
-from dotenv import load_dotenv
-
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiohttp import web
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
-# -----------------
-# CONFIG
-# -----------------
-load_dotenv()
+# Логирование для отладки
+logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-SHEET_NAME = (os.getenv("SHEET_NAME") or "").strip()
+TOKEN = os.getenv("BOT_TOKEN")
+SHEET_NAME = os.getenv("SHEET_NAME")
+GOOGLE_CAL = os.getenv("GOOGLE_CAL_URL")
+APPLE_CAL = os.getenv("APPLE_CAL_URL")
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in Railway Variables.")
-if not SHEET_NAME:
-    raise RuntimeError("SHEET_NAME is not set in Railway Variables.")
-
-DEFAULT_GOOGLE_CAL_URL = (
-    "https://calendar.google.com/calendar/render?action=TEMPLATE"
-    "&text=G5%20Games%20%D0%BC%D0%B8%D1%82%D0%B0%D0%BF%3A%20%D0%9F%D1%80%D0%BE%D0%B4%D1%83%D0%BA%D1%82%20%D0%B8%20%D0%BC%D0%B0%D1%80%D0%BA%D0%B5%D1%82%D0%B8%D0%BD%D0%B3%20%D0%B2%20%D0%B3%D0%B5%D0%B9%D0%BC%D0%B4%D0%B5%D0%B2%D0%B5"
-    "&dates=20260226T180000/20260226T210000"
-    "&ctz=Europe/Belgrade"
-)
-GOOGLE_CAL_URL = (os.getenv("GOOGLE_CAL_URL") or DEFAULT_GOOGLE_CAL_URL).strip()
-APPLE_CAL_URL = (os.getenv("APPLE_CAL_URL") or "").strip()
-
-serbia_tz = pytz.timezone("Europe/Belgrade")
-REMINDER1_DT = serbia_tz.localize(datetime(2026, 2, 25, 15, 0, 0))
-REMINDER2_DT = serbia_tz.localize(datetime(2026, 2, 26, 15, 0, 0))
-
-MAPS_URL = "https://www.google.com/maps/search/?api=1&query=CDT%20Hub%2C%20Kneza%20Milo%C5%A1a%2012%2C%20Belgrade"
-CONFIRMED_COL = 10  # J
-
-# -----------------
-# GOOGLE SHEETS AUTH
-# -----------------
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-
-def build_gspread_client():
-    sa_json = (os.getenv("SERVICE_ACCOUNT_JSON") or "").strip()
-    sa_b64 = (os.getenv("SERVICE_ACCOUNT_B64") or "").strip()
-
-    if sa_json:
-        try:
-            info = json.loads(sa_json)
-            return gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(info, scope))
-        except Exception as e:
-            print(f"DEBUG: JSON error: {e}")
-
-    if sa_b64:
-        try:
-            decoded = base64.b64decode(sa_b64).decode("utf-8")
-            info = json.loads(decoded)
-            return gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(info, scope))
-        except Exception as e:
-            print(f"DEBUG: Base64 error: {e}")
-
-    if os.path.exists("service_account.json"):
-        creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+def get_gspread_client():
+    try:
+        encoded_json = os.getenv("SERVICE_ACCOUNT_B64")
+        # Удаляем возможные пробелы/переносы строк из base64
+        decoded_json = json.loads(base64.b64decode(encoded_json.strip()))
+        creds = Credentials.from_service_account_info(
+            decoded_json, 
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
         return gspread.authorize(creds)
+    except Exception as e:
+        logging.error(f"CRITICAL: Base64 decode error: {e}")
+        return None
 
-    raise RuntimeError("Google credentials not found! Check SERVICE_ACCOUNT_B64 in Railway.")
-
-client = build_gspread_client()
-sheet = client.open(SHEET_NAME).sheet1
-
-# -----------------
-# BOT LOGIC
-# -----------------
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-scheduler = AsyncIOScheduler(timezone=serbia_tz)
-
-class Registration(StatesGroup):
+class RegSteps(StatesGroup):
     full_name = State()
     email = State()
-    position = State()
-    custom_position = State()
+    direction = State()
+    custom_direction = State()
     company = State()
     experience = State()
-    job_search = State()
-    know_g5 = State()
+    job_offers = State()
+    known_g5 = State()
 
-def find_user_row(user_id: int) -> int | None:
-    col = sheet.col_values(1)
-    for idx, val in enumerate(col[1:], start=2):
-        if str(val) == str(user_id): return idx
-    return None
-
-def update_confirmed(user_id: int, value: str) -> bool:
-    row = find_user_row(user_id)
-    if row is None: return False
-    sheet.update_cell(row, CONFIRMED_COL, value)
-    return True
-
-def build_confirm_kb():
-    kb = InlineKeyboardBuilder()
-    kb.row(types.InlineKeyboardButton(text="✅ Я буду!", callback_data="confirm_yes"))
-    kb.row(types.InlineKeyboardButton(text="❌ Изменились планы", callback_data="confirm_no"))
-    return kb.as_markup()
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
 @dp.message(CommandStart())
-async def start(message: types.Message, state: FSMContext):
-    await message.answer("Здравствуйте! 👋\n(1/7) Введите ваши имя и фамилию:")
-    await state.set_state(Registration.full_name)
+async def cmd_start(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Здравствуйте! 👋\nВы регистрируетесь на митап от G5 Games:\n"
+        "«Продукт и маркетинг в геймдеве».\n\n"
+        "(1/7) Введите ваши имя и фамилию:"
+    )
+    await state.set_state(RegSteps.full_name)
 
-@dp.message(Registration.full_name)
+@dp.message(RegSteps.full_name)
 async def process_name(message: types.Message, state: FSMContext):
-    await state.update_data(full_name=message.text.strip())
+    await state.update_data(full_name=message.text)
     await message.answer("(2/7) Введите ваш e-mail:")
-    await state.set_state(Registration.email)
+    await state.set_state(RegSteps.email)
 
-@dp.message(Registration.email)
+@dp.message(RegSteps.email)
 async def process_email(message: types.Message, state: FSMContext):
     if "@" not in message.text:
-        await message.answer("Введите корректный e-mail:")
+        await message.answer("Пожалуйста, введите корректный e-mail (с символом @):")
         return
-    await state.update_data(email=message.text.strip())
-    kb = ReplyKeyboardBuilder()
-    for d in ["🎮 Game Design", "📊 Product", "🎨 Art", "💻 Dev", "📢 Marketing", "✏️ Другое"]:
-        kb.add(types.KeyboardButton(text=d))
-    await message.answer("(3/7) Направление работы:", reply_markup=kb.adjust(2).as_markup(resize_keyboard=True))
-    await state.set_state(Registration.position)
+    await state.update_data(email=message.text)
+    
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🎮 Game Design"), KeyboardButton(text="📊 Product / Analytics")],
+        [KeyboardButton(text="🎨 Art / Design"), KeyboardButton(text="💻 Development")],
+        [KeyboardButton(text="📢 Marketing"), KeyboardButton(text="🧪 QA")],
+        [KeyboardButton(text="🧠 Management / Lead"), KeyboardButton(text="📚 HR / Recruitment")],
+        [KeyboardButton(text="✏️ Другое")]
+    ], resize_keyboard=True)
+    await message.answer("(3/7) В каком направлении вы сейчас работаете?", reply_markup=kb)
+    await state.set_state(RegSteps.direction)
 
-@dp.message(Registration.position)
-async def process_position(message: types.Message, state: FSMContext):
+@dp.message(RegSteps.direction)
+async def process_direction(message: types.Message, state: FSMContext):
     if message.text == "✏️ Другое":
-        await message.answer("Укажите вручную:", reply_markup=ReplyKeyboardRemove())
-        await state.set_state(Registration.custom_position)
-        return
-    await state.update_data(position=message.text)
-    await message.answer("(4/7) Компания:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Registration.company)
+        await message.answer("Пожалуйста, укажите ваше направление вручную:")
+        await state.set_state(RegSteps.custom_direction)
+    else:
+        await state.update_data(direction=message.text)
+        await ask_company(message, state)
 
-@dp.message(Registration.custom_position)
-async def process_custom_position(message: types.Message, state: FSMContext):
-    await state.update_data(position=message.text)
-    await message.answer("(4/7) Компания:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Registration.company)
+@dp.message(RegSteps.custom_direction)
+async def process_custom_direction(message: types.Message, state: FSMContext):
+    await state.update_data(direction=message.text)
+    await ask_company(message, state)
 
-@dp.message(Registration.company)
+async def ask_company(message: types.Message, state: FSMContext):
+    await message.answer("(4/7) В какой компании вы работаете?", reply_markup=types.ReplyKeyboardRemove())
+    await state.set_state(RegSteps.company)
+
+@dp.message(RegSteps.company)
 async def process_company(message: types.Message, state: FSMContext):
     await state.update_data(company=message.text)
-    kb = ReplyKeyboardBuilder()
-    for i in ["нет опыта", "1-3 года", "более 3 лет"]:
-        kb.add(types.KeyboardButton(text=i))
-    await message.answer("(5/7) Опыт:", reply_markup=kb.as_markup(resize_keyboard=True))
-    await state.set_state(Registration.experience)
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="нет опыта"), KeyboardButton(text="менее 1 года")],
+        [KeyboardButton(text="1-3 года"), KeyboardButton(text="3-6 лет")],
+        [KeyboardButton(text="более 6 лет")]
+    ], resize_keyboard=True)
+    await message.answer("(5/7) Ваш опыт работы в геймдеве:", reply_markup=kb)
+    await state.set_state(RegSteps.experience)
 
-@dp.message(Registration.experience)
-async def process_experience(message: types.Message, state: FSMContext):
+@dp.message(RegSteps.experience)
+async def process_exp(message: types.Message, state: FSMContext):
     await state.update_data(experience=message.text)
-    kb = ReplyKeyboardBuilder().add(types.KeyboardButton(text="Да"), types.KeyboardButton(text="Нет"))
-    await message.answer("(6/7) Ищете работу?", reply_markup=kb.as_markup(resize_keyboard=True))
-    await state.set_state(Registration.job_search)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]], resize_keyboard=True)
+    await message.answer("(6/7) Вы рассматриваете новые рабочие предложения?", reply_markup=kb)
+    await state.set_state(RegSteps.job_offers)
 
-@dp.message(Registration.job_search)
-async def process_job_search(message: types.Message, state: FSMContext):
-    await state.update_data(job_search=message.text)
-    kb = ReplyKeyboardBuilder().add(types.KeyboardButton(text="Да"), types.KeyboardButton(text="Нет"))
-    await message.answer("(7/7) Знали о G5?", reply_markup=kb.as_markup(resize_keyboard=True))
-    await state.set_state(Registration.know_g5)
+@dp.message(RegSteps.job_offers)
+async def process_offers(message: types.Message, state: FSMContext):
+    await state.update_data(job_offers=message.text)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]], resize_keyboard=True)
+    await message.answer("(7/7) Знали ли вы про компанию G5 Games ранее?", reply_markup=kb)
+    await state.set_state(RegSteps.known_g5)
 
-@dp.message(Registration.know_g5)
-async def finish(message: types.Message, state: FSMContext):
-    await state.update_data(know_g5=message.text)
+@dp.message(RegSteps.known_g5)
+async def finish_reg(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    user_id = message.from_user.id
-    username = f"@{message.from_user.username}" if message.from_user.username else ""
+    data['known_g5'] = message.text
     
-    values = [user_id, username, data.get("full_name"), data.get("email"), data.get("position"), data.get("company"), data.get("experience"), data.get("job_search"), data.get("know_g5"), ""]
-    
-    row = find_user_row(user_id)
-    if row: sheet.update(f"A{row}:J{row}", [values])
-    else: sheet.append_row(values)
+    try:
+        client = get_gspread_client()
+        if client:
+            sheet = client.open(SHEET_NAME).get_worksheet(0)
+            sheet.append_row([
+                data['full_name'], data['email'], data['direction'], 
+                data['company'], data['experience'], data['job_offers'], data['known_g5']
+            ])
+            logging.info("SUCCESS: Data added to sheet")
+        else:
+            logging.error("ERROR: Gspread client is None")
+    except Exception as e:
+        logging.error(f"TABLE ERROR: {e}")
 
-    await message.answer("🎉 Регистрация завершена! Ждем вас 26 февраля.", reply_markup=ReplyKeyboardRemove())
+    cal_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗓 Google Календарь", url=GOOGLE_CAL)],
+        [InlineKeyboardButton(text="🍎 Apple Календарь", url=APPLE_CAL)]
+    ])
+    
+    await message.answer(
+        f"{data['full_name']}, спасибо за регистрацию! 🎉\n"
+        "Ждем вас на митапе от G5 Games:\n"
+        "«Продукт и маркетинг в геймдеве»\n"
+        "26 февраля в 18:00, Белград.\n\n"
+        "Добавьте событие в календарь:", 
+        reply_markup=cal_kb
+    )
     await state.clear()
 
-@dp.callback_query(F.data.in_(["confirm_yes", "confirm_no"]))
-async def confirm_attendance(callback: types.CallbackQuery):
-    status = "yes" if callback.data == "confirm_yes" else "no"
-    if update_confirmed(callback.from_user.id, status):
-        msg = "Спасибо! Мы вас отметили."
-    else:
-        msg = "Сначала зарегистрируйтесь через /start"
-    await callback.message.answer(msg)
-    await callback.answer()
-
-# -----------------
-# RAILWAY HEALTHCHECK & MAIN
-# -----------------
-async def handle_hc(request):
-    return web.Response(text="Bot is Alive")
-
+async def handle_hc(request): return web.Response(text="OK")
 async def main():
-    # Запуск микро-сервера для Railway
-    app = web.Application()
-    app.router.add_get("/", handle_hc)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    app = web.Application(); app.router.add_get("/", handle_hc)
+    runner = web.AppRunner(app); await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     asyncio.create_task(site.start())
-    print(f"Healthcheck server started on port {port}")
-
-    await bot.delete_webhook(drop_pending_updates=True)
-    scheduler.start()
-    print("Bot is starting polling...")
+    logging.info("Bot is starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
