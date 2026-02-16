@@ -1,0 +1,37 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//G5 Games//Meetup Bot//RU
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+
+BEGIN:VTIMEZONE
+TZID:Europe/Belgrade
+X-LIC-LOCATION:Europe/Belgrade
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+TZNAME:CET
+DTSTART:19701025T030000
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+END:STANDARD
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+TZNAME:CEST
+DTSTART:19700329T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+END:DAYLIGHT
+END:VTIMEZONE
+
+BEGIN:VEVENT
+UID:g5-belgrade-meetup-20260226T180000@G5EventsBot
+DTSTAMP:20260216T000000Z
+SUMMARY:G5 Games митап: Продукт и маркетинг в геймдеве
+DTSTART;TZID=Europe/Belgrade:20260226T180000
+DTEND;TZID=Europe/Belgrade:20260226T210000
+LOCATION:CDT Hub, Кнеза Милоша 12, 6 этаж, Белград, Сербия
+DESCRIPTION:«Продукт и маркетинг в геймдеве» — митап G5 Games о том, как в реальности принимаются продуктовые решения в игровой разработке.\n\n📅 26 февраля, 18:00\n📍 Белград, CDT Hub, Кнеза Милоша 12, 6 этаж\n\nВ программе:\n— Главные тренды: что будет с мобильными играми в 2026?\n— Топ ошибок продакта в геймдеве, которые стоят времени и денег\n— Нетворкинг с участниками индустрии и кейтеринг
+URL:https://www.google.com/maps/search/?api=1&query=CDT%20Hub%2C%20Kneza%20Milo%C5%A1a%2012%2C%20Belgrade
+END:VEVENT
+
+END:VCALENDAR
