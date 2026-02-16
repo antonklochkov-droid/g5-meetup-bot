@@ -3,7 +3,6 @@ import base64
 import json
 import asyncio
 import logging
-from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -17,7 +16,6 @@ from pytz import timezone
 
 logging.basicConfig(level=logging.INFO)
 
-# --- НАСТРОЙКИ ---
 TOKEN = os.getenv("BOT_TOKEN")
 SHEET_NAME = os.getenv("SHEET_NAME")
 GOOGLE_CAL = os.getenv("GOOGLE_CAL_URL")
@@ -34,10 +32,9 @@ def get_gspread_client():
         )
         return gspread.authorize(creds)
     except Exception as e:
-        logging.error(f"Gspread Auth Error: {e}")
+        logging.error(f"Gspread Error: {e}")
         return None
 
-# Состояния регистрации
 class Registration(StatesGroup):
     full_name = State()
     email = State()
@@ -52,11 +49,9 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler(timezone=BELGRADE_TZ)
 
-# --- ДИАЛОГ РЕГИСТРАЦИИ ---
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()  # Сбрасываем старые состояния, если они были
+    await state.clear()
     await message.answer(
         "Здравствуйте! 👋\nВы регистрируетесь на митап от G5 Games:\n"
         "«Продукт и маркетинг в геймдеве».\n\n"
@@ -76,7 +71,6 @@ async def process_email(message: types.Message, state: FSMContext):
         await message.answer("Пожалуйста, введите корректный e-mail (с символом @):")
         return
     await state.update_data(email=message.text)
-    
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="🎮 Game Design"), KeyboardButton(text="📊 Product / Analytics")],
         [KeyboardButton(text="🎨 Art / Design"), KeyboardButton(text="💻 Development")],
@@ -133,19 +127,21 @@ async def process_offers(message: types.Message, state: FSMContext):
 @dp.message(Registration.known_g5)
 async def finish_reg(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    full_name = data.get('full_name')
+    user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else "N/A"
     
     try:
         client = get_gspread_client()
         if client:
             sheet = client.open(SHEET_NAME).get_worksheet(0)
+            # ПОРЯДОК: A:ID, B:Username, C:Name, D:Email, E:Pos, F:Comp, G:Exp, H:Job, I:KnowG5, J:Wait
             sheet.append_row([
-                full_name, data.get('email'), data.get('direction'), 
-                data.get('company'), data.get('experience'), 
-                data.get('job_offers'), message.text, message.from_user.id, "Wait"
+                str(user_id), username, data.get('full_name'), data.get('email'),
+                data.get('direction'), data.get('company'), data.get('experience'),
+                data.get('job_offers'), message.text, "Wait"
             ])
     except Exception as e:
-        logging.error(f"Sheet write error: {e}")
+        logging.error(f"Write error: {e}")
 
     cal_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗓 Google Календарь", url=GOOGLE_CAL)],
@@ -153,38 +149,23 @@ async def finish_reg(message: types.Message, state: FSMContext):
     ])
     
     await message.answer(
-        f"{full_name}, спасибо за регистрацию! 🎉\n"
+        f"{data.get('full_name')}, спасибо за регистрацию! 🎉\n"
         "Ждем вас на митапе от G5 Games:\n"
-        "«Геймдев — от проблемы к результату»\n"
-        "26 февраля в 18:00, Белград.\n\n"
+        "«Продукт и маркетинг в геймдеве»\n"
+        "26 февраля в 18:00, Кнеза Милоша 12 (CDT Hub).\n\n"
         "Добавьте событие в календарь:", 
         reply_markup=cal_kb
     )
     await state.clear()
 
-# --- ЛОГИКА УВЕДОМЛЕНИЙ ---
-
-# 25 февраля, 15:00 (за сутки)
-async def send_24h_reminder():
-    client = get_gspread_client()
-    sheet = client.open(SHEET_NAME).get_worksheet(0)
-    records = sheet.get_all_values()[1:]
-    
-    kb = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="✅ Я буду!"), KeyboardButton(text="❌ Изменились планы")]
-    ], resize_keyboard=True)
-
-    for row in records:
-        try:
-            user_id = row[7]
-            await bot.send_message(
-                user_id, 
-                "🔔 Уже завтра митап от G5 Games: «Продукт и маркетинг в геймдеве»\n"
-                "📅 26 февраля, 18:00\n📍 CDT Hub, Кнеза Милоша 12\n\n"
-                "Подскажите, пожалуйста, сможете ли вы прийти?",
-                reply_markup=kb
-            )
-        except: continue
+# --- REMINDERS ---
+async def update_status(user_id, status):
+    try:
+        client = get_gspread_client()
+        sheet = client.open(SHEET_NAME).get_worksheet(0)
+        cell = sheet.find(str(user_id))
+        sheet.update_cell(cell.row, 10, status) # Колонка J
+    except: pass
 
 @dp.message(F.text == "✅ Я буду!")
 async def confirm_yes(message: types.Message):
@@ -196,36 +177,10 @@ async def confirm_no(message: types.Message):
     await update_status(message.from_user.id, "Declined")
     await message.answer("Понимаем, планы меняются 🙂\nСпасибо, что предупредили!\nСледите за анонсами в @g5careers.", reply_markup=types.ReplyKeyboardRemove())
 
-async def update_status(user_id, status):
-    try:
-        client = get_gspread_client()
-        sheet = client.open(SHEET_NAME).get_worksheet(0)
-        cell = sheet.find(str(user_id))
-        sheet.update_cell(cell.row, 9, status) # Столбец I
-    except: pass
-
-# 26 февраля, 15:00 (за 3 часа)
-async def send_3h_reminder():
-    client = get_gspread_client()
-    sheet = client.open(SHEET_NAME).get_worksheet(0)
-    records = sheet.get_all_values()[1:]
-    
-    for row in records:
-        if row[8] == "Coming": # Пишем только тем, кто подтвердил
-            try:
-                await bot.send_message(row[7], "🚀 Мы начинаем сегодня в 18:00 — продуктовый митап от G5 Games\nДо скорой встречи в CDT Hub!")
-            except: continue
-
-# Планировщик
-scheduler.add_job(send_24h_reminder, 'cron', month=2, day=25, hour=15, minute=0)
-scheduler.add_job(send_3h_reminder, 'cron', month=2, day=26, hour=15, minute=0)
-
-# --- ЗАПУСК ---
 async def handle_hc(request): return web.Response(text="OK")
 
 async def main():
-    app = web.Application()
-    app.router.add_get("/", handle_hc)
+    app = web.Application(); app.router.add_get("/", handle_hc)
     runner = web.AppRunner(app); await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     asyncio.create_task(site.start())
