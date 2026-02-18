@@ -223,7 +223,7 @@ async def finish_reg(message: types.Message, state: FSMContext):
         "Добавьте событие в календарь:",
         reply_markup=cal_kb
     )
-    await message.answer("Вы можете закрыть меню кнопкой ниже.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("До встречи!", reply_markup=ReplyKeyboardRemove())
     await state.clear()
 
 
