@@ -21,18 +21,16 @@ from google.oauth2.service_account import Credentials
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
+# Константы
 TOKEN = os.getenv("BOT_TOKEN")
 SHEET_NAME = os.getenv("SHEET_NAME")
 GOOGLE_CAL = os.getenv("GOOGLE_CAL_URL")
 APPLE_CAL = os.getenv("APPLE_CAL_URL")
 
 PHOTO_LINK = "ССЫЛКА_НА_ФОТО"
-
-# Прямая ссылка на картинку (или Telegram file_id)
-REMINDER_IMAGE_URL = "https://your-image-url.com/image.jpg"
-
 BELGRADE_TZ = timezone("Europe/Belgrade")
 
 
@@ -80,6 +78,7 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler(timezone=BELGRADE_TZ)
 
+
 # --- РЕГИСТРАЦИЯ ---
 
 
@@ -126,7 +125,6 @@ async def process_email(message: types.Message, state: FSMContext):
 @dp.message(Registration.direction)
 async def process_direction(message: types.Message, state: FSMContext):
     text = message.text.strip()
-
     if text == "Другое":
         await message.answer("Пожалуйста, укажите ваше направление вручную:")
         await state.set_state(Registration.custom_direction)
@@ -150,7 +148,6 @@ async def ask_company(message: types.Message, state: FSMContext):
 @dp.message(Registration.company)
 async def process_company(message: types.Message, state: FSMContext):
     await state.update_data(company=message.text.strip())
-
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="нет опыта"), KeyboardButton(text="менее 1 года")],
@@ -166,7 +163,6 @@ async def process_company(message: types.Message, state: FSMContext):
 @dp.message(Registration.experience)
 async def process_exp(message: types.Message, state: FSMContext):
     await state.update_data(experience=message.text.strip())
-
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]],
         resize_keyboard=True,
@@ -178,7 +174,6 @@ async def process_exp(message: types.Message, state: FSMContext):
 @dp.message(Registration.job_offers)
 async def process_offers(message: types.Message, state: FSMContext):
     await state.update_data(job_offers=message.text.strip())
-
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]],
         resize_keyboard=True,
@@ -190,7 +185,6 @@ async def process_offers(message: types.Message, state: FSMContext):
 @dp.message(Registration.known_g5)
 async def finish_reg(message: types.Message, state: FSMContext):
     await state.update_data(known_g5=message.text.strip())
-
     data = await state.get_data()
     user_id = message.from_user.id
     username = f"@{message.from_user.username}" if message.from_user.username else "N/A"
@@ -231,7 +225,6 @@ async def finish_reg(message: types.Message, state: FSMContext):
         "Добавьте событие в календарь:",
         reply_markup=cal_kb,
     )
-
     await message.answer("Вы можете закрыть меню кнопкой ниже.", reply_markup=ReplyKeyboardRemove())
     await state.clear()
 
@@ -331,7 +324,6 @@ async def update_feedback(user_id: int, answers: dict):
         sheet = client.open(SHEET_NAME).get_worksheet(0)
         cell = sheet.find(str(user_id))
         row = cell.row
-
         sheet.update_cell(row, 11, answers.get("q1", ""))
         sheet.update_cell(row, 12, answers.get("q2", ""))
         sheet.update_cell(row, 13, answers.get("q3", ""))
@@ -367,26 +359,22 @@ async def send_reminder_24h():
     client = get_gspread_client()
     if not client:
         return
-
     sheet = client.open(SHEET_NAME).get_worksheet(0)
     records = sheet.get_all_values()
-
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="❌ Изменились планы"), KeyboardButton(text="✅ Я буду!")]],
         resize_keyboard=True,
     )
-
     text = (
         "🔔 Уже завтра митап от G5 Games: «Продукт и маркетинг в геймдеве»\n"
         "📅 26 февраля, 18:00\n"
         "📍 CDT Hub, Кнеза Милоша 12\n\n"
         "Подскажите, пожалуйста, планируете ли вы прийти?"
     )
-
     for row in records[1:]:
         try:
             user_id = int(row[0])
-            await bot.send_photo(user_id, photo=REMINDER_IMAGE_URL, caption=text, reply_markup=kb)
+            await bot.send_message(user_id, text, reply_markup=kb)
             await asyncio.sleep(0.05)
         except Exception as e:
             logging.error(f"send_reminder_24h error: {e}")
@@ -396,16 +384,13 @@ async def send_reminder_3h():
     client = get_gspread_client()
     if not client:
         return
-
     sheet = client.open(SHEET_NAME).get_worksheet(0)
     records = sheet.get_all_values()
-
     text = (
         "🚀 Сегодня в 18:00 — G5 Games Meetup «Продукт и маркетинг в геймдеве».\n"
         "Обсудим тренды мобильных игр, продуктовые решения и ошибки, которые стоят дорого.\n\n"
         "До скорой встречи в CDT Hub!"
     )
-
     for row in records[1:]:
         try:
             user_id = int(row[0])
@@ -421,17 +406,14 @@ async def send_feedback_request():
     client = get_gspread_client()
     if not client:
         return
-
     sheet = client.open(SHEET_NAME).get_worksheet(0)
     records = sheet.get_all_values()
-
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Да, хочу", callback_data="start_feedback")],
             [InlineKeyboardButton(text="Нет, спасибо", callback_data="decline_feedback")],
         ]
     )
-
     for row in records[1:]:
         try:
             user_id = int(row[0])
@@ -451,12 +433,9 @@ async def send_photos_link():
     client = get_gspread_client()
     if not client:
         return
-
     sheet = client.open(SHEET_NAME).get_worksheet(0)
     records = sheet.get_all_values()
-
     msg = f"📸 Фото с G5 Games Meetup уже доступны!\n\nСсылка: {PHOTO_LINK}"
-
     for row in records[1:]:
         try:
             user_id = int(row[0])
@@ -487,17 +466,19 @@ async def handle_hc(request):
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_hc)
-
     runner = web.AppRunner(app)
     await runner.setup()
-
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     asyncio.create_task(site.start())
 
-    # --- РАСПИСАНИЕ (Тестовые даты на 18 февраля) ---
-    scheduler.add_job(send_reminder_24h, "cron", year=2026, month=2, day=18, hour=12, minute=40)
-    scheduler.add_job(send_reminder_3h, "cron", year=2026, month=2, day=18, hour=12, minute=45)
-    scheduler.add_job(send_feedback_request, "cron", year=2026, month=2, day=18, hour=12, minute=50)
+    # --- РАСПИСАНИЕ ---
+    # 1. Напоминание за 24 часа
+    scheduler.add_job(send_reminder_24h, "cron", year=2026, month=2, day=18, hour=12, minute=45)
+    # 2. Напоминание за 3 часа
+    scheduler.add_job(send_reminder_3h, "cron", year=2026, month=2, day=18, hour=12, minute=50)
+    # 3. Фидбек
+    scheduler.add_job(send_feedback_request, "cron", year=2026, month=2, day=18, hour=12, minute=55)
+    # 4. Фото
     scheduler.add_job(send_photos_link, "cron", year=2026, month=2, day=18, hour=13, minute=0)
 
     scheduler.start()
