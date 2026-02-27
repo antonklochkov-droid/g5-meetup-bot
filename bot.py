@@ -30,7 +30,7 @@ SHEET_NAME = os.getenv("SHEET_NAME")
 GOOGLE_CAL = os.getenv("GOOGLE_CAL_URL")
 APPLE_CAL = os.getenv("APPLE_CAL_URL")
 
-PHOTO_LINK = "ССЫЛКА_НА_ФОТО"
+PHOTO_LINK = "https://starodubtsevnikita.com/disk/26-02-2026-g5-meeting-02-26-2026-belgrade-540bw8"
 MAPS_URL = "https://maps.app.goo.gl/VohpNtSW4BuU3rx89"
 BELGRADE_TZ = timezone("Europe/Belgrade")
 
